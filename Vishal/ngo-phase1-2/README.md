@@ -153,10 +153,6 @@ client/src/
 - Uploads: Multer middleware with type and size validation is ready; upload endpoints arrive with the modules that use them
 
 
-## License
-
-No license file is included yet. Add one (for example MIT) before making the repository public if you want others to reuse the code.
-
 ---
 **Vishal Kumar Jha**\
 GitHub: https://github.com/vishalkumarjha192
