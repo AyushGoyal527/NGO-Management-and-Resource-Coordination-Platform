@@ -183,8 +183,12 @@ client/src/
 - The sidebar shows Users, Permissions, Volunteers, Students and Beneficiaries so far; each new module appears automatically when its navigation entry and API are added
 - Task attachments, donation receipts and event documents arrive with their modules (the upload and download plumbing is already in place)
 
+
+
+
 ---
-**Vishal Kumar Jha**\
+
+**Vishal Kumar Jha**
 GitHub: https://github.com/vishalkumarjha192
 
 ---
