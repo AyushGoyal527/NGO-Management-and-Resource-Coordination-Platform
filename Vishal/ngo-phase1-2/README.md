@@ -152,10 +152,7 @@ client/src/
 - Only Users and Permissions modules exist in the sidebar so far; each new module appears automatically when its navigation entry and API are added
 - Uploads: Multer middleware with type and size validation is ready; upload endpoints arrive with the modules that use them
 
-<<<<<<< HEAD
-=======
 
->>>>>>> 8bdfd2e19d7857ea99f18fa93615ef169cdec1a6
 ---
 **Vishal Kumar Jha**\
 GitHub: https://github.com/vishalkumarjha192
