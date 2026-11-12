@@ -213,6 +213,10 @@ client/src/
 - Donations have no refund or edit-after-receipt lock yet. Editing a received donation is allowed and is recorded in its history
 - Task attachments and event documents arrive with their modules (the upload and download plumbing is already in place). Donations can already hold uploaded documents
 
-## License
 
-No license file is included yet. Add one (for example MIT) before making the repository public if you want others to reuse the code.
+---
+
+**Vishal Kumar Jha**
+GitHub: https://github.com/vishalkumarjha192
+
+---
