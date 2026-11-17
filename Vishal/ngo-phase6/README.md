@@ -328,6 +328,9 @@ client/src/
 - Volunteers can read task attachments but cannot upload their own yet
 - Overdue tasks are computed live (past the due date and still open)
 
-## License
+---
 
-No license file is included yet. Add one (for example MIT) before making the repository public if you want others to reuse the code.
+**Vishal Kumar Jha**
+GitHub: https://github.com/vishalkumarjha192
+
+---
