@@ -1,0 +1,90 @@
+var require = require('module').createRequire(process.cwd() + '/');
+const fs = require('fs'), os = require('os'), path = require('path');
+process.env.JWT_SECRET = 'x'.repeat(32); process.env.NODE_ENV = 'test';
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'up-')); process.env.UPLOAD_DIR = tmp; process.chdir('/');
+const U = (id, role, perms) => ({ _id: Buffer.from(id).toString('hex').padEnd(24, '0'), role, status: 'active', permissions: perms, name: id });
+const users = { admin: U('a', 'admin', []), none: U('n', 'manager', []), view: U('w', 'manager', ['settings.view']), edit: U('e', 'manager', ['settings.view', 'settings.edit']), vol: U('v', 'volunteer', []), annV: U('x', 'manager', ['announcements.view']) };
+require.cache[require.resolve('./models/User')] = { id: 'u', filename: 'u', loaded: true, exports: { findById: async (id) => Object.values(users).find((u) => u._id === id) } };
+const { signToken } = require('./utils/token');
+const app = require('./app');
+let pass = 0, fail = 0;
+const s = app.listen(0, async () => {
+  const host = `http://localhost:${s.address().port}`; const base = host + '/api';
+  const call = async (u, method, p, body, raw) => {
+    const r = await fetch((raw ? host : base) + p, { method, headers: { ...(u ? { Authorization: `Bearer ${signToken(users[u]._id)}` } : {}), ...(body && !(body instanceof FormData) ? { 'content-type': 'application/json' } : {}) }, body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(1500) }).catch((e) => ({ status: e.name === 'TimeoutError' ? 'PASSED' : 'ERR ' + e.message, json: async () => ({}), headers: new Headers() }));
+    return { status: r.status, msg: (await r.json().catch(() => ({}))).message || '', headers: r.headers, data: r };
+  };
+  const check = async (name, u, method, p, want, body, msg) => { const r = await call(u, method, p, body); const ok = r.status === want && (!msg || r.msg.includes(msg)); ok ? pass++ : fail++; console.log(ok ? 'PASS' : 'FAIL', name, '->', r.status, r.msg); return r; };
+  // CMS permissions
+  await check('website get: not logged in', null, 'GET', '/website', 401);
+  await check('website get: no settings.view', 'none', 'GET', '/website', 403);
+  await check('website get: volunteer', 'vol', 'GET', '/website', 403);
+  await check('website get: view reaches data', 'view', 'GET', '/website', 'PASSED');
+  await check('website put section: view only refused', 'view', 'PUT', '/website/sections/hero', 403, { title: 'x' });
+  await check('website put org: view only refused', 'view', 'PUT', '/website/organization', 403, { name: 'x' });
+  await check('website put: not logged in', null, 'PUT', '/website/sections/hero', 401, {});
+  await check('website: unknown section', 'edit', 'PUT', '/website/sections/evil', 404, {});
+  await check('website: prototype section name', 'edit', 'PUT', '/website/sections/constructor', 404, {});
+  await check('website: missing headline', 'edit', 'PUT', '/website/sections/hero', 400, { title: '' }, 'Headline');
+  await check('website: http link refused', 'edit', 'PUT', '/website/sections/contact', 400, { mapUrl: 'http://maps.example.com' }, 'https://');
+  await check('website: javascript image refused', 'edit', 'PUT', '/website/sections/about', 400, { image: 'javascript:alert(1)' }, 'image');
+  await check('website: other-folder image refused', 'edit', 'PUT', '/website/sections/about', 400, { image: '/uploads/documents/abc.jpg' }, 'image');
+  await check('website: too many hero images', 'edit', 'PUT', '/website/sections/hero', 400, { title: 'T', images: Array(6).fill({ url: 'https://x.com/a.jpg' }) }, 'at most 5');
+  await check('website: too many stats', 'edit', 'PUT', '/website/sections/stats', 400, { items: Array(7).fill({ label: 'a', source: 'volunteers' }) }, 'at most 6');
+  await check('website: bad stat source', 'edit', 'PUT', '/website/sections/stats', 400, { items: [{ label: 'a', source: 'hack' }] }, 'valid choice');
+  await check('website: manual stat needs number', 'edit', 'PUT', '/website/sections/stats', 400, { items: [{ label: 'a', source: 'manual' }] }, 'Number is required');
+  await check('website: valid section reaches data', 'edit', 'PUT', '/website/sections/hero', 'PASSED', { title: 'Hello', description: 'd', images: [{ url: '/uploads/site/' + 'a'.repeat(32) + '.jpg' }] });
+  await check('website: org bad email', 'edit', 'PUT', '/website/organization', 400, { name: 'N', email: 'nope' }, 'valid email');
+  await check('website: org valid reaches data', 'admin', 'PUT', '/website/organization', 'PASSED', { name: 'N' });
+  // image upload
+  const form = (bytes, type, name) => { const f = new FormData(); f.append('image', new Blob([bytes], { type }), name); return f; };
+  await check('image: view only refused', 'view', 'POST', '/website/images', 403, form(Buffer.from([0xff, 0xd8, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0]), 'image/jpeg', 'a.jpg'));
+  await check('image: none attached', 'edit', 'POST', '/website/images', 400, new FormData(), 'Choose an image');
+  await check('image: pdf refused', 'edit', 'POST', '/website/images', 400, form(Buffer.from('%PDF-1.4 xxxxx'), 'application/pdf', 'a.pdf'), 'Only JPG');
+  const fake = await check('image: fake jpeg refused', 'edit', 'POST', '/website/images', 400, form(Buffer.from('not really an image'), 'image/jpeg', 'a.jpg'), 'does not look like');
+  const left = fs.existsSync(path.join(tmp, 'site')) ? fs.readdirSync(path.join(tmp, 'site')).length : 0; left === 0 ? pass++ : fail++; console.log(left === 0 ? 'PASS' : 'FAIL', 'image: fake file deleted from disk');
+  const good = await call('edit', 'POST', '/website/images', form(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3]), 'image/jpeg', 'a.jpg'));
+  const url = (await good.data.json?.().catch(() => null)); 
+  const goodOk = good.status === 201; goodOk ? pass++ : fail++; console.log(goodOk ? 'PASS' : 'FAIL', 'image: real jpeg accepted ->', good.status, good.msg);
+  const files = fs.readdirSync(path.join(tmp, 'site'));
+  const m = /^[a-f0-9]{32}\.jpg$/.test(files[0] || ''); m ? pass++ : fail++; console.log(m ? 'PASS' : 'FAIL', 'image: stored with random name', files[0]);
+  const served = await fetch(`${host}/uploads/site/${files[0]}`); served.status === 200 ? pass++ : fail++; console.log(served.status === 200 ? 'PASS' : 'FAIL', 'image: served publicly ->', served.status);
+  const doc = await fetch(`${host}/uploads/documents/x.pdf`); doc.status === 404 ? pass++ : fail++; console.log(doc.status === 404 ? 'PASS' : 'FAIL', 'documents folder not public ->', doc.status);
+  // public reads
+  const site = await check('public site: no login needed', null, 'GET', '/public/site', 'PASSED');
+  await check('public programs: no login needed', null, 'GET', '/public/programs', 'PASSED');
+  await check('public events: no login needed', null, 'GET', '/public/events?when=past', 'PASSED');
+  // volunteer application validation
+  const ok = { name: 'Asha Rao', email: 'asha@example.com', phone: '+91 98765 43210', skills: ['Teaching'], availability: 'Weekends', message: 'Hi' };
+  await check('apply: valid reaches data', null, 'POST', '/public/volunteer-applications', 'PASSED', ok);
+  await check('apply: no name', null, 'POST', '/public/volunteer-applications', 400, { ...ok, name: '' }, 'name');
+  await check('apply: bad email', null, 'POST', '/public/volunteer-applications', 400, { ...ok, email: 'nope' }, 'email');
+  await check('apply: missing email', null, 'POST', '/public/volunteer-applications', 400, { ...ok, email: undefined }, 'email');
+  await check('apply: bad phone', null, 'POST', '/public/volunteer-applications', 400, { ...ok, phone: 'abc' }, 'phone');
+  await check('apply: too many skills', null, 'POST', '/public/volunteer-applications', 400, { ...ok, skills: Array(11).fill('a') }, 'up to 10');
+  await check('apply: skills not array', null, 'POST', '/public/volunteer-applications', 400, { ...ok, skills: 'x' }, 'skills');
+  await check('apply: long message', null, 'POST', '/public/volunteer-applications', 400, { ...ok, message: 'x'.repeat(1001) }, 'at most 1000');
+  await check('apply: object as name', null, 'POST', '/public/volunteer-applications', 400, { ...ok, name: { a: 1 } }, 'name');
+  const honey = await check('apply: honeypot gets a fake success', null, 'POST', '/public/volunteer-applications', 201, { ...ok, website: 'http://spam.example' });
+  await check('apply: cannot set status/source', null, 'POST', '/public/volunteer-applications', 'PASSED', { ...ok, status: 'active', source: 'internal', role: 'admin' });
+  // donation inquiry validation
+  const d = { name: 'Ravi', email: 'r@example.com', donationType: 'money', amount: 500 };
+  await check('inquiry: valid reaches data', null, 'POST', '/public/donation-inquiries', 'PASSED', d);
+  await check('inquiry: bad type', null, 'POST', '/public/donation-inquiries', 400, { ...d, donationType: 'gold' }, 'what you would like');
+  await check('inquiry: zero amount', null, 'POST', '/public/donation-inquiries', 400, { ...d, amount: 0 }, 'amount');
+  await check('inquiry: negative amount', null, 'POST', '/public/donation-inquiries', 400, { ...d, amount: -5 }, 'more than 0');
+  await check('inquiry: huge amount', null, 'POST', '/public/donation-inquiries', 400, { ...d, amount: 99999999 }, 'at most');
+  await check('inquiry: text amount', null, 'POST', '/public/donation-inquiries', 400, { ...d, amount: 'lots' }, 'more than 0');
+  await check('inquiry: no contact', null, 'POST', '/public/donation-inquiries', 400, { name: 'Ravi', donationType: 'food' }, 'email or phone');
+  await check('inquiry: money without amount', null, 'POST', '/public/donation-inquiries', 400, { name: 'Ravi', email: 'r@example.com', donationType: 'money' }, 'amount');
+  await check('inquiry: food needs no amount', null, 'POST', '/public/donation-inquiries', 'PASSED', { name: 'Ravi', phone: '9876543210', donationType: 'food' });
+  await check('inquiry: operator in body is stripped', null, 'POST', '/public/donation-inquiries', 'PASSED', { ...d, status: 'received', receiptNumber: 'X', $where: '1' });
+  // announcements permissions
+  await check('announcements: not logged in', null, 'GET', '/announcements', 401);
+  await check('announcements: volunteer refused', 'vol', 'GET', '/announcements', 403);
+  await check('announcements: manager without permission', 'none', 'GET', '/announcements', 403);
+  await check('announcements: view reaches data', 'annV', 'GET', '/announcements', 'PASSED');
+  await check('announcements: view cannot create', 'annV', 'POST', '/announcements', 403, { title: 't', message: 'm' });
+  await check('announcements: admin invalid body', 'admin', 'POST', '/announcements', 400, { title: '' });
+  console.log(`\n${pass} passed, ${fail} failed`); fs.rmSync(tmp, { recursive: true, force: true }); s.close(); process.exit(fail ? 1 : 0);
+});
